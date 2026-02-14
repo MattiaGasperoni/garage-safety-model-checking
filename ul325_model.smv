@@ -1,72 +1,99 @@
 --------------------------------------------------------------------------
--- MODELLO UL 325 - GARAGE DOOR SAFETY SYSTEM
--- Progetto di Linguaggi di Programmazione e Verifica del Software
+-- MODELLO: UL 325 - GARAGE DOOR SAFETY SYSTEM
+-- CORSO:   Linguaggi di Programmazione e Verifica del Software
 --------------------------------------------------------------------------
--- Sistema di controllo porta da garage conforme allo standard UL 325
--- con particolare attenzione ai requisiti di sicurezza (entrapment protection).
+-- DESCRIZIONE:
+-- Modellazione di un sistema di controllo per porta da garage conforme 
+-- allo standard di sicurezza UL 325, il focus è sulla protezione 
+-- contro l'intrappolamento (entrapment protection).
 --
--- STRUTTURA:
--- - Controller: gestisce i comandi dell'utente
--- - Door: meccanismo porta con sensori e logica di sicurezza
---
--- MIGLIORAMENTI RISPETTO AL MODELLO BASE:
--- 1. Posizione esplicita della porta (0-10 unità)
--- 2. Sensori di fine corsa (top_sensor, bottom_sensor)
--- 3. Gestione più realistica del movimento
+-- ARCHITETTURA:
+-- 1. Controller: Modella l'input utente e la logica di comando.
+-- 2. Door:       Modella la fisica della porta, i sensori e gli attuatori.
 --------------------------------------------------------------------------
 
 
 --------------------------------------------------------------------------
--- MODULO CONTROLLER
+-- MODULO: CONTROLLER
+-- Questo modulo simula il comportamento dell'utente e la logica di comando.
+--------------------------------------------------------------------------
+-- PARAMETRI:
+-- door_state    : Lo stato attuale della porta
+-- door_position : La posizione discreta della porta (0..10)
 --------------------------------------------------------------------------
 MODULE Controller(door_state, door_position)
 
 VAR
-    -- Comandi disponibili per l'utente
-    -- START_OPEN  : avvia apertura
-    -- START_CLOSE : avvia chiusura  
-    -- STOP        : arresta movimento
-    -- RESET       : sblocca dopo blocco di sicurezza
+    -- Variabile di stato che rappresenta l'input dell'utente.
+    -- START_OPEN  : Richiesta di apertura porta
+    -- START_CLOSE : Richiesta di chiusura porta
+    -- STOP        : Richiesta di arresto immediato
+    -- RESET       : Richiesta di ripristino dopo un errore/blocco
     command : {START_CLOSE, START_OPEN, STOP, RESET};
 
-    -- I comandi sono non deterministici per simulare input utente imprevedibile
-    -- ma con vincoli di fairness per evitare comportamenti irrealistici
+    -- Il valore di 'command' è scelto non-deterministicamente ad ogni passo
+    -- per coprire tutti i possibili scenari di interazione utente
 
-    -- Vincoli di fairness
-    FAIRNESS !(command = STOP);      -- STOP non premuto all'infinito
-    FAIRNESS command = RESET;        -- RESET viene eventualmente premuto se necessario
+
+    -- VINCOLI DI FAIRNESS
+    -- Necessari per escludere scenari di simulazione non realistici che impedirebbero la verifica delle proprietà.
+
+    -- 1. Evita che il tasto STOP rimanga premuto per sempre
+    --    Garantisce che il sistema abbia la possibilità di ricevere altri input
+    FAIRNESS !(command = STOP); 
+    
+    -- 2. Garantisce che il comando RESET venga provato infinite volte
+    --    Assicura che, se il sistema entra in stato di blocco, l'utente
+    --    tenterà eventualmente di sbloccarlo (evita deadlock dovuti all'inazione)
+    FAIRNESS command = RESET;
 
 
 --------------------------------------------------------------------------
--- MODULO DOOR
+-- MODULO: DOOR
+-- Gestisce la fisica della porta, la logica degli stati e i sensori
+--------------------------------------------------------------------------
+-- PARAMETRI:
+-- command              : Input dal Controller
+-- force_limit_exceeded : Input ambientale (sensore di contatto/forza)
+-- photo_eye_broken     : Input ambientale (sensore ottico)
 --------------------------------------------------------------------------
 MODULE Door(command, force_limit_exceeded, photo_eye_broken)
 
 VAR
-    -- Stato della porta
+    -- Stati della porta:
+    -- IDLE                : Porta ferma e sicura
+    -- CLOSING/OPENING     : In movimento
+    -- REVERSING           : Inversione di sicurezza dopo ostacolo
+    -- STOPPED_BY_OBSTACLE : Stato di attesa dopo un ostacolo
     state : {IDLE, CLOSING, OPENING, REVERSING, STOPPED_BY_OBSTACLE};
     
-    -- Posizione della porta: 0 = completamente chiusa, 10 = completamente aperta
-    -- Questo permette di modellare meglio il movimento e i sensori di fine corsa
+    -- Posizione della porta nell'intervallo 0..10 per permettere la verifica di stati intermedi
+    -- 0  = Completamente Chiusa
+    -- 10 = Completamente Aperta
     position : 0..10;
     
-    -- Contatore ostacoli consecutivi durante chiusura
+    -- Contatore per la logica "Double Entrapment" (UL 325)
+    -- Traccia quante volte consecutive la porta incontra un ostacolo, se raggiunge 2 ostacoli, il sistema deve entrare in blocco
     obstacle_counter : 0..2;
 
 DEFINE
-    -- Sensori di fine corsa (derivati dalla posizione)
-    top_sensor := (position = 10);      -- Porta completamente aperta
-    bottom_sensor := (position = 0);    -- Porta completamente chiusa
+    -- Sensori di fine corsa, si basano sulla posizione della porta
+    top_sensor    := (position = 10);    -- Rileva apertura completa
+    bottom_sensor := (position = 0);     -- Rileva chiusura completa
     
-    -- Allarme di sicurezza (attivo quando obstacle_counter = 2)
+    -- Segnale di allarme/blocco
+    -- Attivo quando si verificano due incidenti consecutivi senza una chiusura riuscita
     alarm := (obstacle_counter = 2);
     
-    -- Condizione ostacolo (almeno uno dei due sensori attivato)
+    -- Segnale aggregato di rilevamento ostacolo
+    -- TRUE se il sensore di forza (contatto) o la fotocellula (non contatto) scattano
     obstacle := (force_limit_exceeded | photo_eye_broken);
 
 ASSIGN
-    init(state) := IDLE;
-    init(position) := 5;              -- Posizione iniziale intermedia
+    -- Inizializzazione del sistema:
+    -- La porta parte ferma, chiusa e senza errori pregressi.
+    init(state)            := IDLE;
+    init(position)         := 0;              
     init(obstacle_counter) := 0;
 
     --------------------------------------------------------------------------
@@ -75,31 +102,33 @@ ASSIGN
     --------------------------------------------------------------------------
     next(state) :=
         case
-            -- Secondo ostacolo durante chiusura: blocco di sicurezza
+            -- Quando rileviamo il secondo ostacolo durante la chiusura la porta va in blocco di sicurezza
             state = CLOSING & obstacle & obstacle_counter = 1 : 
                 STOPPED_BY_OBSTACLE;
 
-            -- Primo ostacolo durante chiusura: inversione immediata
+            -- Quando rileviamo il primo ostacolo durante la chiusura la porta va in inversione immediata
             state = CLOSING & obstacle & obstacle_counter = 0 : 
                 REVERSING;
 
-            -- Fine fase di reversing: passa ad apertura
+            -- Fine fase di inversione si passa ad apertura
             state = REVERSING : 
                 OPENING;
 
-            -- Uscita da blocco di sicurezza solo con RESET
+            -- Uscita da blocco di sicurezza solo se l'utente preme RESET
             state = STOPPED_BY_OBSTACLE & command = RESET : 
                 IDLE;
+
+            -- La porta rimane in blocco finche l'utente non preme RESET
             state = STOPPED_BY_OBSTACLE : 
                 STOPPED_BY_OBSTACLE;
 
             -- Avvio chiusura da IDLE
-            -- Richiede: non già chiusa, nessun ostacolo presente
+            -- Richiede che la porta non sia già chiusa e non ci sia nessun ostacolo presente
             state = IDLE & command = START_CLOSE & !bottom_sensor & !obstacle : 
                 CLOSING;
 
             -- Avvio apertura da IDLE
-            -- Richiede: non già aperta
+            -- Richiede che la porta non sia già aperta
             state = IDLE & command = START_OPEN & !top_sensor : 
                 OPENING;
 
@@ -107,15 +136,15 @@ ASSIGN
             (state = CLOSING | state = OPENING) & command = STOP : 
                 IDLE;
 
-            -- Fine corsa durante apertura
+            -- Raggiunto il fine corsa durante l'apertura
             state = OPENING & top_sensor : 
                 IDLE;
 
-            -- Fine corsa durante chiusura (chiusura completata con successo)
+            -- Raggiunto il fine corsa durante la chiusura (chiusura completata con successo)
             state = CLOSING & bottom_sensor : 
                 IDLE;
 
-            -- Mantiene stato corrente negli altri casi
+            -- Mantiene lo stato corrente negli altri casi
             TRUE : 
                 state;
         esac;
@@ -125,19 +154,15 @@ ASSIGN
     --------------------------------------------------------------------------
     next(position) :=
         case
-            -- Apertura: incrementa posizione fino a 10
+            -- Apertura porta: incrementa la posizione fino a 10 (totalmente aperta)
             (state = OPENING | state = REVERSING) & position < 10 : 
                 position + 1;
 
-            -- Chiusura: decrementa posizione fino a 0
+            -- Chiusura porta: decrementa la posizione fino a 0 (totalmente chiusa)
             state = CLOSING & position > 0 : 
                 position - 1;
 
-            -- Reset dopo blocco: torna a posizione intermedia
-            state = STOPPED_BY_OBSTACLE & command = RESET : 
-                5;
-
-            -- Altrimenti mantiene posizione
+            -- Altrimenti mantiene la posizione attaule della porta (incluso quando l'utente preme RESET)
             TRUE : 
                 position;
         esac;
@@ -147,41 +172,54 @@ ASSIGN
     --------------------------------------------------------------------------
     next(obstacle_counter) :=
         case
-            -- Incrementa quando rileva ostacolo durante chiusura
+            -- Incrementa il contatore quando rileva un ostacolo durante la chiusura
             state = CLOSING & obstacle & obstacle_counter < 2 : 
                 obstacle_counter + 1;
 
-            -- Reset dopo chiusura completata con successo
+            -- Quando la porta viene chiusa con successo resetta il counter degli ostacoli
             state = CLOSING & next(state) = IDLE & bottom_sensor : 
                 0;
 
-            -- Reset manuale dopo uscita da blocco
+            -- Quando l'utente preme RESET si resetta il counter degli ostacoli
             state = STOPPED_BY_OBSTACLE & command = RESET : 
                 0;
 
-            -- Mantiene valore negli altri casi
+            -- Mantiene il valore negli altri casi
             TRUE : 
                 obstacle_counter;
         esac;
 
 
 --------------------------------------------------------------------------
--- MODULO MAIN
+-- MODULO: MAIN
+-- Punto di ingresso della simulazione.
+-- Integra il Controller e la Porta in un ciclo di controllo.
 --------------------------------------------------------------------------
 MODULE main
 
 VAR
-    -- Sensori ambientali (modellati come input non deterministici)
-    force_limit_exceeded : boolean;   -- Sensore di forza (primary entrapment)
-    photo_eye_broken : boolean;       -- Fotocellula (secondary entrapment)
-    
+    ----------------------------------------------------------------------
+    -- Sensori Ambientali
+    ----------------------------------------------------------------------
+    force_limit_exceeded : boolean;   -- TRUE se la porta urta un oggetto (sensore di forza/contatto)
+    photo_eye_broken     : boolean;   -- TRUE se il raggio ottico viene interrotto (presenza di un ostacolo)
+
+    ----------------------------------------------------------------------
     -- Istanze dei moduli
+    ----------------------------------------------------------------------
     D : Door(C.command, force_limit_exceeded, photo_eye_broken);
     C : Controller(D.state, D.position);
 
-    -- Vincoli di fairness sui sensori
-    -- Gli ostacoli non rimangono attivi per sempre (vengono rimossi)
+
+    -- VINCOLI DI FAIRNESS
+    -- Necessari per la verifica delle proprietà di liveness
+    -- Senza queste fairness, il model checker genererebbe controesempi banali
+    -- in cui un ostacolo rimane presente per sempre, impedendo la chiusura.
+    
+    -- Assunzione: L'ostacolo fisico viene eventualmente rimosso
     FAIRNESS !force_limit_exceeded;
+    
+    -- Assunzione: L'interruzione della fotocellula è temporanea
     FAIRNESS !photo_eye_broken;
 
 
@@ -193,26 +231,29 @@ VAR
 -- SAFETY PROPERTIES
 ---------------------------------------------------------------------------
 
--- [S1] La porta non deve chiudersi spontaneamente
--- Se siamo in IDLE senza comando START_CLOSE, non possiamo passare a CLOSING
+-- [SP 1] No chiusura spontanea
+-- La porta non può iniziare a chiudersi senza un comando esplicito START_CLOSE
 CTLSPEC
     AG (D.state = IDLE & C.command != START_CLOSE -> AX D.state != CLOSING)
 
--- [S2] Non è possibile passare direttamente da CLOSING a OPENING
--- (deve passare per REVERSING o IDLE)
+-- [SP 2] No inversione diretta
+-- Per cambiare direzione (CLOSING→OPENING) serve passare per REVERSING o IDLE
 CTLSPEC
     AG (D.state = CLOSING -> !EX D.state = OPENING)
 
--- [S3] Se c'è un ostacolo, il comando START_CLOSE viene ignorato
+-- [SP 3] Blocco preventivo
+-- START_CLOSE viene ignorato se c'è già un ostacolo rilevato
 CTLSPEC
     AG ((C.command = START_CLOSE & (force_limit_exceeded | photo_eye_broken)) 
         -> AX D.state != CLOSING)
 
--- [S4] L'allarme rimane attivo finché non arriva RESET
+-- [SP 4] Persistenza allarme
+-- L'allarme di sicurezza non si disattiva da solo, richiede RESET esplicito
 CTLSPEC
     AG (D.alarm -> A[D.alarm U C.command = RESET])
 
--- [S5] Dal blocco di sicurezza si esce solo con RESET
+-- [SP 5] Sblocco manuale obbligatorio
+-- Dopo un blocco di sicurezza, solo RESET permette di uscire dallo stato bloccato
 CTLSPEC
     AG (D.state = STOPPED_BY_OBSTACLE -> A[D.state = STOPPED_BY_OBSTACLE U C.command = RESET])
 
@@ -222,16 +263,18 @@ CTLSPEC
 -- LIVENESS PROPERTIES  
 ---------------------------------------------------------------------------
 
--- [L1] Il sistema torna sempre eventualmente a IDLE
--- (non ci sono deadlock)
+-- [LP 1] Assenza di deadlock
+-- Il sistema torna sempre eventualmente a IDLE (nessuno stato di blocco permanente)
 CTLSPEC
     AG AF D.state = IDLE
 
--- [L2] Ogni apertura termina prima o poi
+-- [LP 2] Completamento apertura
+-- Ogni operazione di apertura termina sempre, tornando a IDLE
 CTLSPEC
     AG (D.state = OPENING -> AF D.state = IDLE)
 
--- [L3] Se la porta è in REVERSING, prima o poi passa ad OPENING
+-- [LP 3] Progressione inversione
+-- Dopo REVERSING, il sistema passa sempre ad OPENING (inversione completa)
 CTLSPEC
     AG (D.state = REVERSING -> AF D.state = OPENING)
 
@@ -241,24 +284,25 @@ CTLSPEC
 -- UL 325 COMPLIANCE
 ---------------------------------------------------------------------------
 
--- [UL1] Primary Entrapment Protection
--- Se durante chiusura si rileva forza eccessiva, si deve invertire immediatamente
+-- [UL 1] Primary Entrapment Protection (sensore di forza)
+-- Un rilevamento di forza eccessiva implica una inversione immediata nel ciclo successivo
 LTLSPEC
     G ((D.state = CLOSING & force_limit_exceeded & D.obstacle_counter = 0) 
        -> X D.state = REVERSING)
 
--- [UL2] Secondary Entrapment Protection  
--- Se durante chiusura si rompe la fotocellula, si deve invertire immediatamente
+-- [UL 2] Secondary Entrapment Protection (fotocellula)
+-- Un'nterruzione del fascio infrarosso implica una inversione immediata nel ciclo successivo
 LTLSPEC
     G ((D.state = CLOSING & photo_eye_broken & D.obstacle_counter = 0) 
        -> X D.state = REVERSING)
 
--- [UL3] Il contatore ostacoli deve passare da 0 a 1 prima di arrivare a 2
--- (non può saltare valori)
+-- [UL 3] Progressione contatore ostacoli
+-- Il contatore deve incrementare gradualmente: 0 → 1 → 2 non deve effettuare dei salti
 LTLSPEC
     !((!(D.obstacle_counter = 1)) U (D.obstacle_counter = 2))
 
--- [UL4] Con fotocellula rotta, la porta non può essere in chiusura
+-- [UL 4] Divieto chiusura con fotocellula attiva
+-- Quando il fascio infrarosso è interrotto, lo stato CLOSING è impossibile
 LTLSPEC
     G ((D.state = CLOSING & photo_eye_broken) -> X (D.state != CLOSING))
 
@@ -268,10 +312,12 @@ LTLSPEC
 -- ADDITIONAL PROPERTIES
 ---------------------------------------------------------------------------
 
--- [A1] Durante apertura non si può passare a chiusura senza fermarsi
+-- [AP 1] Controllo movimento
+-- Durante l'apertura è impossibile passare alla chiusura senza tornare prima a IDLE
 LTLSPEC
-    G (D.state = OPENING -> (D.state != CLOSING U D.state = IDLE))
+    G (D.state = OPENING -> (!(D.state = CLOSING) U D.state = IDLE))
 
--- [A2] La posizione rimane nei limiti [0, 10]
+-- [AP 2] Controllo posizione
+-- La posizione deve sempre rimanere nel range valido [0, 10]
 CTLSPEC
     AG (D.position >= 0 & D.position <= 10)
