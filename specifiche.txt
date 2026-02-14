@@ -1,0 +1,14 @@
+-- specification AG ((D.state = IDLE & C.command != START_CLOSE) -> AX D.state != CLOSING)  is true
+-- specification AG (D.state = CLOSING -> !(EX D.state = OPENING))  is true
+-- specification AG ((C.command = START_CLOSE & (force_limit_exceeded | photo_eye_broken)) -> AX D.state != CLOSING)  is true
+-- specification AG (D.alarm -> A [ D.alarm U C.command = RESET ] )  is true
+-- specification AG (D.state = STOPPED_BY_OBSTACLE -> A [ D.state = STOPPED_BY_OBSTACLE U C.command = RESET ] )  is true
+-- specification AG (AF D.state = IDLE)  is true
+-- specification AG (D.state = OPENING -> AF D.state = IDLE)  is true
+-- specification AG (D.state = REVERSING -> AF D.state = OPENING)  is true
+-- specification AG (D.position >= 0 & D.position <= 10)  is true
+-- specification  G (((D.state = CLOSING & force_limit_exceeded) & D.obstacle_counter = 0) ->  X D.state = REVERSING)  is true
+-- specification  G (((D.state = CLOSING & photo_eye_broken) & D.obstacle_counter = 0) ->  X D.state = REVERSING)  is true
+-- specification !(!(D.obstacle_counter = 1) U D.obstacle_counter = 2)  is true
+-- specification  G ((D.state = CLOSING & photo_eye_broken) ->  X D.state != CLOSING)  is true
+-- specification  G (D.state = OPENING -> (!(D.state = CLOSING) U D.state = IDLE))  is true
